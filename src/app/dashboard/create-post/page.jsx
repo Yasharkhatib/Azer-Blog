@@ -1,15 +1,102 @@
 "use client";
 
 import { useUser } from "@clerk/nextjs";
-import { Button, FileInput, Select, TextInput } from "flowbite-react";
-
+import { Alert, Button, FileInput, Select, TextInput } from "flowbite-react";
+import Image from "next/image";
+import { useState } from "react";
 import dynamic from "next/dynamic";
 const ReactQuill = dynamic(() => import("react-quill-new"), { ssr: false });
-// https://dev.to/a7u/reactquill-with-nextjs-478b
+
 import "react-quill-new/dist/quill.snow.css";
+
+import { CircularProgressbar } from "react-circular-progressbar";
+import "react-circular-progressbar/dist/styles.css";
 
 export default function CreatePostPage() {
   const { isSignedIn, user, isLoaded } = useUser();
+
+  const [imageUploadError, setImageUploadError] = useState(null);
+  const [formData, setFormData] = useState({});
+
+  const CLOUD_NAME = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+  const UPLOAD_PRESET = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadComplete, setUploadComplete] = useState(false);
+  const [cldResponse, setCldResponse] = useState(null);
+
+  const handleUpdloadImage = async () => {
+    if (!file) {
+      console.error("Please select a file.");
+      return;
+    }
+
+    const uniqueUploadId = generateUniqueUploadId();
+    const chunkSize = 5 * 1024 * 1024;
+    const totalChunks = Math.ceil(file.size / chunkSize);
+    let currentChunk = 0;
+
+    setUploading(true);
+
+    const uploadChunk = async (start, end) => {
+      const formData = new FormData();
+      formData.append("file", file.slice(start, end));
+      formData.append("cloud_name", CLOUD_NAME);
+      formData.append("upload_preset", UPLOAD_PRESET);
+      const contentRange = `bytes ${start}-${end - 1}/${file.size}`;
+
+      console.log(
+        `Uploading chunk for uniqueUploadId: ${uniqueUploadId}; start: ${start}, end: ${
+          end - 1
+        }`
+      );
+
+      try {
+        const response = await fetch(
+          `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/auto/upload`,
+          {
+            method: "POST",
+            body: formData,
+            headers: {
+              "X-Unique-Upload-Id": uniqueUploadId,
+              "Content-Range": contentRange,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Chunk upload failed.");
+        }
+
+        currentChunk++;
+
+        if (currentChunk < totalChunks) {
+          const nextStart = currentChunk * chunkSize;
+          const nextEnd = Math.min(nextStart + chunkSize, file.size);
+          uploadChunk(nextStart, nextEnd);
+        } else {
+          setUploadComplete(true);
+          setUploading(false);
+
+          const fetchResponse = await response.json();
+          setCldResponse(fetchResponse);
+          console.info("File upload complete.");
+        }
+      } catch (error) {
+        console.error("Error uploading chunk:", error);
+        setUploading(false);
+      }
+    };
+
+    const start = 0;
+    const end = Math.min(chunkSize, file.size);
+    uploadChunk(start, end);
+  };
+
+  const generateUniqueUploadId = () => {
+    return `uqid-${Date.now()}`;
+  };
 
   if (!isLoaded) {
     return null;
@@ -38,17 +125,44 @@ export default function CreatePostPage() {
             </Select>
           </div>
           <div className="flex gap-4 items-center justify-between border-4 border-teal-500 border-dotted p-3">
-            <FileInput type="file" accept="image/*" />
+            <FileInput
+              type="file"
+              accept="image/*"
+              onChange={(e) => setFile(e.target.files[0])}
+            />
             <Button
               type="button"
               gradientDuoTone="purpleToBlue"
               size="sm"
               outline
+              onClick={handleUpdloadImage}
+              disabled={uploading}
             >
-              Upload Image
+              {uploading ? (
+                <div className="w-16 h-16">
+                  <CircularProgressbar
+                    value={uploading}
+                    text={`${uploading || 0}%`}
+                  />
+                </div>
+              ) : (
+                "Upload Image"
+              )}
             </Button>
           </div>
-
+          {imageUploadError && (
+            <Alert color="failure">{imageUploadError}</Alert>
+          )}
+          {formData.image && (
+            <Image
+              src={formData.image}
+              alt="upload"
+              className="w-full h-72 object-cover"
+            />
+          )}
+          {/* 
+          {uploadComplete}
+*/}
           <ReactQuill
             theme="snow"
             placeholder="Write something..."
